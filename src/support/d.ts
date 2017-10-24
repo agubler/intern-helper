@@ -51,9 +51,10 @@ export function compareProperty<T>(callback: (value: T, name: string, parent: Wi
  * @param replacement The DNode to be replaced
  */
 export function replaceChild(target: WNode | HNode, index: number | string, replacement: DNode): WNode | HNode {
+	const { children = [] } = target;
 	/* TODO: [Combine with findIndex](https://github.com/dojo/test-extras/issues/28) */
 	if (typeof index === 'number') {
-		target.children[index] = replacement;
+		children[index] = replacement;
 	}
 	else {
 		const indexes = index.split(',').map(Number);
@@ -62,12 +63,15 @@ export function replaceChild(target: WNode | HNode, index: number | string, repl
 			if (!(isWNode(target) || isHNode(target))) {
 				throw new TypeError(`Index of "${index}" is not resolving to a valid target`);
 			}
-			return target.children[idx];
+			const { children = [] } = target;
+			return children[idx];
 		}, <DNode> target);
 		if (!(isWNode(resolvedTarget) || isHNode(resolvedTarget))) {
 			throw new TypeError(`Index of "${index}" is not resolving to a valid target`);
 		}
-		resolvedTarget.children[lastIndex] = replacement;
+		if (resolvedTarget.children) {
+			resolvedTarget.children[lastIndex] = replacement;
+		}
 	}
 	return target;
 }
@@ -87,7 +91,8 @@ export function findKey(target: WNode | HNode, key: string | object): WNode | HN
 		return target;
 	}
 	let found: WNode | HNode | undefined;
-	target.children
+	const { children = [] } = target;
+	children
 		.forEach((child) => {
 			if (hasChildren(child)) {
 				if (found) {
@@ -109,21 +114,25 @@ export function findKey(target: WNode | HNode, key: string | object): WNode | HN
  * @param index A number or a string indicating the child index
  */
 export function findIndex(target: WNode | HNode, index: number | string): DNode | undefined {
+	const { children = [] } = target;
 	if (typeof index === 'number') {
-		return target.children[index];
+		return children[index];
 	}
 	const indexes = index.split(',').map(Number);
 	const lastIndex = indexes.pop()!;
 	const resolvedTarget = indexes.reduce((target: any, idx) => {
+		const { children } = target;
 		if (!(isWNode(target) || isHNode(target))) {
 			return target;
 		}
-		return target.children[idx];
+		return children[idx];
 	}, target);
 	if (!(isWNode(resolvedTarget) || isHNode(resolvedTarget))) {
 		return;
 	}
-	return resolvedTarget.children[lastIndex];
+	if (resolvedTarget.children) {
+		return resolvedTarget.children[lastIndex];
+	}
 }
 
 export function replaceChildProperties(target: WNode | HNode, index: number | string, properties: WidgetProperties | VirtualDomProperties): WNode | HNode {

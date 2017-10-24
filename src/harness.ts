@@ -1,14 +1,17 @@
 import 'pepjs';
 
+import global from '@dojo/shim/global';
 import Evented from '@dojo/core/Evented';
 import { createHandle } from '@dojo/core/lang';
-import { VNode } from '@dojo/interfaces/vdom';
 import { includes } from '@dojo/shim/array';
 import {
 	ClassesFunction,
 	Constructor,
 	DNode,
+	HNode,
 	ProjectionOptions,
+	Projection,
+	VirtualDomProperties,
 	WidgetBaseInterface,
 	WidgetProperties,
 	WNode
@@ -17,10 +20,11 @@ import { decorate, isWNode, v, w } from '@dojo/widget-core/d';
 import WidgetBase from '@dojo/widget-core/WidgetBase';
 import { afterRender } from '@dojo/widget-core/decorators/afterRender';
 import cssTransitions from '@dojo/widget-core/animations/cssTransitions';
-import { dom, Projection, VNodeProperties } from 'maquette';
+import { dom } from '@dojo/widget-core/vdom';
 import assertRender from './support/assertRender';
 import callListener, { CallListenerOptions } from './support/callListener';
 import sendEvent, { SendEventOptions } from './support/sendEvent';
+import { stub, SinonStub } from 'sinon';
 
 const ROOT_CUSTOM_ELEMENT_NAME = 'test--harness';
 const WIDGET_STUB_CUSTOM_ELEMENT = 'test--widget-stub';
@@ -56,25 +60,25 @@ const EVENT_HANDLERS = [
 ];
 
 /**
- * An internal function which finds a VNode based on `key`
- * @param target The VNode to search
+ * An internal function which finds a DNode based on `key`
+ * @param target The DNode to search
  * @param key The key to find
  */
-function findVNodebyKey(target: VNode, key: string | object): VNode | undefined {
-	if (typeof target === 'object' && target.properties && target.properties.key === key) {
+function findDNodebyKey(target: DNode, key: string | object): DNode | undefined {
+	if (target && typeof target === 'object' && target.properties && target.properties.key === key) {
 		return target;
 	}
-	let found: VNode | undefined;
-	if (typeof target === 'object' && target.children) {
+	let found: DNode | undefined;
+	if (target && typeof target === 'object' && target.children) {
 		target.children
 			.forEach((child) => {
 				if (found) {
-					if (findVNodebyKey(child, key)) {
+					if (findDNodebyKey(child, key)) {
 						console.warn(`Duplicate key of "${key}" found.`);
 					}
 				}
 				else {
-					found = findVNodebyKey(child, key);
+					found = findDNodebyKey(child, key);
 				}
 			});
 	}
@@ -99,6 +103,15 @@ function stubRender(target: DNode): DNode {
 		(dNode) => isWNode(dNode)
 	);
 	return target;
+}
+
+let rICStub: SinonStub = stub(global, 'requestIdleCallback').returns(1);
+
+function resolveRIC() {
+	for (let i = 0; i < rICStub.callCount; i++) {
+		rICStub.getCall(0).args[0]();
+	}
+	rICStub.reset();
 }
 
 interface StubWidgetProperties extends WidgetProperties {
@@ -199,9 +212,10 @@ class WidgetHarness<P extends WidgetProperties, W extends Constructor<WidgetBase
 	 */
 	render(): DNode {
 		const { _id: id, _widgetConstructor, children, properties } = this;
+		debugger;
 		return v(
 				ROOT_CUSTOM_ELEMENT_NAME,
-				{ id },
+				{ id, key: id },
 				[ w(_widgetConstructor, properties, children) ]
 			);
 	}
@@ -249,19 +263,20 @@ export class Harness<P extends WidgetProperties, W extends Constructor<WidgetBas
 
 	private _children: DNode[] | undefined;
 	private _classes: string[] = [];
-	private _currentRender: VNode;
+	private _currentRender: DNode;
 	private _projection: Projection | undefined;
 	private _projectionOptions: ProjectionOptions;
 	private _projectionRoot: HTMLElement;
 	private _properties: P;
 
 	private _render = () => { /* using a lambda property here creates a bound function */
-		this._projection && this._projection.update(this._currentRender = this._widgetHarnessRender() as VNode);
+		this._projection && this._projection.update(this._currentRender = this._widgetHarnessRender() as DNode);
+		resolveRIC();
 	}
 
 	private _root: HTMLElement | undefined;
 	private _widgetHarness: WidgetHarness<P, W>;
-	private _widgetHarnessRender: () => string | VNode | null;
+	private _widgetHarnessRender: () => string | DNode | null;
 
 	/**
 	 * A *stub* of an event handler/listener that can be used when creating expected virtual DOM
@@ -283,7 +298,8 @@ export class Harness<P extends WidgetProperties, W extends Constructor<WidgetBas
 		this._projectionOptions = {
 			transitions: cssTransitions,
 			eventHandlerInterceptor: this._eventHandlerInterceptor.bind(this._widgetHarness),
-			nodeEvent: new Evented()
+			afterRenderCallbacks: [],
+			merge: false
 		};
 
 		this.own(this._widgetHarness);
@@ -298,12 +314,14 @@ export class Harness<P extends WidgetProperties, W extends Constructor<WidgetBas
 			this._attached = false;
 		}));
 
-		this._projection = dom.append(this._projectionRoot, this._currentRender = this._widgetHarnessRender() as VNode, this._projectionOptions);
+		this._projection = dom.append(this._projectionRoot, this._currentRender = this._widgetHarnessRender() as HNode, this._widgetHarness, this._projectionOptions);
+		debugger;
+		resolveRIC();
 		this._attached = true;
 		return this._attached;
 	}
 
-	private _eventHandlerInterceptor(propertyName: string, eventHandler: Function, domNode: Element, properties: VNodeProperties) {
+	private _eventHandlerInterceptor(propertyName: string, eventHandler: Function, domNode: Element, properties: VirtualDomProperties) {
 		if (includes(EVENT_HANDLERS, propertyName)) {
 			return function(this: Node, ...args: any[]) {
 				return eventHandler.apply(properties.bind || this, args);
@@ -434,9 +452,9 @@ export class Harness<P extends WidgetProperties, W extends Constructor<WidgetBas
 	public sendEvent<I extends EventInit>(type: string, options: HarnessSendEventOptions<I> = {}): this {
 		let { target = this.getDom(), key, ...sendOptions } = options;
 		if (key) {
-			const vnode = findVNodebyKey(this._currentRender, key);
-			if (vnode && vnode.domNode) {
-				target = vnode.domNode as Element;
+			const vnode = findDNodebyKey(this._currentRender, key);
+			if (vnode && !isWNode(vnode) && typeof vnode !== 'string') {
+				target = (vnode as any).domNode as Element;
 			}
 			else {
 				throw new Error(`Could not find key of "${key}" to sendEvent`);
